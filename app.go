@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/go-redis/redis"
 	"github.com/gocql/gocql"
 	"github.com/gorilla/mux"
 )
@@ -56,6 +57,27 @@ func GetSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	sess, _ := cluster.CreateSession()
 	defer sess.Close()
 
+	// Connect to Redis server
+	client := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "",
+		DB:       1,
+	})
+	_, err := client.Ping().Result()
+	if err == nil {
+		fmt.Println("connected to Redis")
+	}
+
+	// Check Redis server
+	val, err := client.Get(uuid).Result()
+	if err == nil {
+		resp.SessionID = val
+		resp.Code = GetSessionError
+		response, _ := json.Marshal(resp)
+		fmt.Fprint(w, string(response))
+		return
+	}
+
 	if err := sess.Query(`SELECT sessionid FROM sessions WHERE userid = ? ORDER BY ts DESC LIMIT 1 ALLOW FILTERING`,
 		uuid).Consistency(gocql.One).Scan(&resp.SessionID); err != nil {
 		resp.Code = GetSessionError
@@ -65,6 +87,9 @@ func GetSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 		log.Print(err)
 		return
 	}
+
+	// Add to Redis server
+	err = client.Set(uuid, resp.SessionID, 0).Err()
 
 	resp.Code = GetSessionSuccess
 	response, _ := json.Marshal(resp)
@@ -82,6 +107,17 @@ func NewSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	sess, _ := cluster.CreateSession()
 	defer sess.Close()
 
+	// Connect to Redis server
+	client := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "",
+		DB:       1,
+	})
+	_, err := client.Ping().Result()
+	if err == nil {
+		fmt.Println("connected to Redis")
+	}
+
 	// Generate ID and add to query
 	sessionid := RandomString(16)
 	if err := sess.Query(`INSERT INTO sessions (userid, ts, sessionid) VALUES (?, ?, ?)`,
@@ -93,6 +129,9 @@ func NewSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 		log.Print(err)
 		return
 	}
+
+	// Add pair to Redis
+	err = client.Set(uuid, resp.SessionID, 0).Err()
 
 	resp.Code = PostSessionSuccess
 	response, _ := json.Marshal(resp)
