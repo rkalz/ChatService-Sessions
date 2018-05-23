@@ -70,9 +70,9 @@ func GetSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	// Check Redis server
 	val, err := client.Get(uuid).Result()
-	if err == nil {
+	if val != "" {
 		resp.SessionID = val
-		resp.Code = GetSessionError
+		resp.Code = GetSessionSuccess
 		response, _ := json.Marshal(resp)
 		fmt.Fprint(w, string(response))
 		return
