@@ -23,6 +23,8 @@ const (
 	GetSessionError     = 104
 	PostSessionSuccess  = 200
 	PostSessionError    = 201
+	DelSessionSuccess   = 300
+	DelSessionError     = 301
 )
 
 type Response struct {
@@ -58,18 +60,21 @@ func GetSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	defer sess.Close()
 
 	// Connect to Redis server
-	client := redis.NewClient(&redis.Options{
+	cache := redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "",
 		DB:       1,
 	})
-	_, err := client.Ping().Result()
-	if err == nil {
-		fmt.Println("connected to Redis")
+	_, err := cache.Ping().Result()
+	if err != nil {
+		resp.Code = GetSessionError
+		response, _ := json.Marshal(resp)
+		fmt.Fprint(w, string(response))
+		return
 	}
 
 	// Check Redis server
-	val, err := client.Get(uuid).Result()
+	val, err := cache.Get(uuid).Result()
 	if val != "" {
 		resp.SessionID = val
 		resp.Code = GetSessionSuccess
@@ -89,7 +94,7 @@ func GetSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add to Redis server
-	err = client.Set(uuid, resp.SessionID, 0).Err()
+	err = cache.Set(uuid, resp.SessionID, 0).Err()
 
 	resp.Code = GetSessionSuccess
 	response, _ := json.Marshal(resp)
@@ -108,12 +113,12 @@ func NewSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	defer sess.Close()
 
 	// Connect to Redis server
-	client := redis.NewClient(&redis.Options{
+	cache := redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "",
 		DB:       1,
 	})
-	_, err := client.Ping().Result()
+	_, err := cache.Ping().Result()
 	if err == nil {
 		fmt.Println("connected to Redis")
 	}
@@ -131,9 +136,50 @@ func NewSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add pair to Redis
-	err = client.Set(uuid, resp.SessionID, 0).Err()
+	err = cache.Set(uuid, resp.SessionID, 0).Err()
 
 	resp.Code = PostSessionSuccess
+	response, _ := json.Marshal(resp)
+	fmt.Fprint(w, string(response))
+}
+
+func DeleteSessionEndpoint(w http.ResponseWriter, r *http.Request) {
+	uuid := mux.Vars(r)["uuid"]
+	resp := Response{}
+
+	// Connect to Cassandra cluster and get session
+	cluster := gocql.NewCluster("127.0.0.1", "127.0.0.2", "127.0.0.3")
+	cluster.Keyspace = "sessions"
+	cluster.Consistency = gocql.Three
+	sess, _ := cluster.CreateSession()
+	defer sess.Close()
+
+	// Connect to Redis server
+	cache := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "",
+		DB:       1,
+	})
+	_, err := cache.Ping().Result()
+	if err == nil {
+		fmt.Println("connected to Redis")
+	}
+
+	// Remove session from redis
+	err = cache.Del(uuid).Err()
+
+	// Remove session from Cassandra
+	if err := sess.Query(`DELETE FROM session WHERE sessionid = ? ALLOW FILTERING`,
+		uuid).Exec(); err != nil {
+		resp.Code = DelSessionError
+		response, _ := json.Marshal(resp)
+		fmt.Fprint(w, string(response))
+		log.Print("Query insert failed: ")
+		log.Print(err)
+		return
+	}
+
+	resp.Code = DelSessionSuccess
 	response, _ := json.Marshal(resp)
 	fmt.Fprint(w, string(response))
 }
@@ -143,6 +189,7 @@ func main() {
 	r.HandleFunc("/", DefaultEndpoint)
 	r.HandleFunc("/api/v1/private/sessions/get/{uuid}", GetSessionEndpoint)
 	r.HandleFunc("/api/v1/private/sessions/add/{uuid}", NewSessionEndpoint).Methods("POST")
+	r.HandleFunc("/api/v1/private/sessions/del/{uuid}", DeleteSessionEndpoint).Methods("POST")
 
 	if os.Getenv("PORT") == "" {
 		os.Setenv("PORT", "8081")
