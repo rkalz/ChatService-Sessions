@@ -50,6 +50,8 @@ func DefaultEndpoint(w http.ResponseWriter, r *http.Request) {
 
 func GetSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	uuid := mux.Vars(r)["uuid"]
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Content-Type", "application/json")
 	resp := Response{}
 
 	// Connect to Cassandra cluster and get session
@@ -83,18 +85,16 @@ func GetSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := sess.Query(`SELECT sessionid FROM sessions WHERE userid = ? ORDER BY ts DESC LIMIT 1 ALLOW FILTERING`,
-		uuid).Consistency(gocql.One).Scan(&resp.SessionID); err != nil {
+	if err := sess.Query(`SELECT sessionid FROM sessions WHERE userid = ? AND active=True ALLOW FILTERING`,
+		uuid).Consistency(gocql.One).Scan(&resp.SessionID); err != nil || resp.SessionID == "" {
 		resp.Code = GetSessionError
 		response, _ := json.Marshal(resp)
 		fmt.Fprint(w, string(response))
-		log.Print("Query select fail: ")
-		log.Print(err)
 		return
 	}
 
 	// Add to Redis server
-	err = cache.Set(uuid, resp.SessionID, 0).Err()
+	err = cache.Set(resp.SessionID, uuid, 0).Err()
 
 	resp.Code = GetSessionSuccess
 	response, _ := json.Marshal(resp)
@@ -103,6 +103,8 @@ func GetSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 
 func NewSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	uuid := mux.Vars(r)["uuid"]
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Content-Type", "application/json")
 	resp := Response{}
 
 	// Connect to Cassandra cluster and get session
@@ -125,8 +127,8 @@ func NewSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	// Generate ID and add to query
 	sessionid := RandomString(16)
-	if err := sess.Query(`INSERT INTO sessions (userid, ts, sessionid) VALUES (?, ?, ?)`,
-		uuid, time.Now(), sessionid).Exec(); err != nil {
+	if err := sess.Query(`INSERT INTO sessions (sessionid, active, ts, userid) VALUES (?, true, ?, ?)`,
+		sessionid, time.Now(), uuid).Exec(); err != nil {
 		resp.Code = PostSessionError
 		response, _ := json.Marshal(resp)
 		fmt.Fprint(w, string(response))
@@ -136,23 +138,26 @@ func NewSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add pair to Redis
-	err = cache.Set(uuid, resp.SessionID, 0).Err()
+	err = cache.Set(sessionid, uuid, 0).Err()
 
 	resp.Code = PostSessionSuccess
+	resp.SessionID = sessionid
 	response, _ := json.Marshal(resp)
 	fmt.Fprint(w, string(response))
 }
 
 func DeleteSessionEndpoint(w http.ResponseWriter, r *http.Request) {
-	uuid := mux.Vars(r)["uuid"]
+	sess := mux.Vars(r)["sess"]
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Content-Type", "application/json")
 	resp := Response{}
 
 	// Connect to Cassandra cluster and get session
-	cluster := gocql.NewCluster("127.0.0.1", "127.0.0.2", "127.0.0.3")
+	cluster := gocql.NewCluster("127.0.0.1")
 	cluster.Keyspace = "sessions"
 	cluster.Consistency = gocql.Three
-	sess, _ := cluster.CreateSession()
-	defer sess.Close()
+	db, _ := cluster.CreateSession()
+	defer db.Close()
 
 	// Connect to Redis server
 	cache := redis.NewClient(&redis.Options{
@@ -166,11 +171,11 @@ func DeleteSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Remove session from redis
-	err = cache.Del(uuid).Err()
+	err = cache.Del(sess).Err()
 
 	// Remove session from Cassandra
-	if err := sess.Query(`DELETE FROM session WHERE sessionid = ? ALLOW FILTERING`,
-		uuid).Exec(); err != nil {
+	if err := db.Query(`UPDATE sessions SET active=false WHERE sessionid = ?`,
+		sess).Exec(); err != nil {
 		resp.Code = DelSessionError
 		response, _ := json.Marshal(resp)
 		fmt.Fprint(w, string(response))
@@ -189,7 +194,7 @@ func main() {
 	r.HandleFunc("/", DefaultEndpoint)
 	r.HandleFunc("/api/v1/private/sessions/get/{uuid}", GetSessionEndpoint)
 	r.HandleFunc("/api/v1/private/sessions/add/{uuid}", NewSessionEndpoint).Methods("POST")
-	r.HandleFunc("/api/v1/private/sessions/del/{uuid}", DeleteSessionEndpoint).Methods("POST")
+	r.HandleFunc("/api/v1/private/sessions/del/{sess}", DeleteSessionEndpoint).Methods("POST")
 
 	if os.Getenv("PORT") == "" {
 		os.Setenv("PORT", "8081")
