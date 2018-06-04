@@ -4,44 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
 	"net/http"
 	"os"
 	"time"
 
-	"github.com/go-redis/redis"
 	"github.com/gocql/gocql"
 	"github.com/gorilla/mux"
 )
-
-// Result Code of operation
-const (
-	GetSessionSuccess   = 100
-	GetSessionMultiple  = 101
-	GetSessionNoneFound = 102
-	GetSessionTooOld    = 103
-	GetSessionError     = 104
-	PostSessionSuccess  = 200
-	PostSessionError    = 201
-	DelSessionSuccess   = 300
-	DelSessionError     = 301
-)
-
-type Response struct {
-	Code      int    `json:"code"`
-	SessionID string `json:"session,omitempty"`
-}
-
-// RandomString Generates a random string of [A-Za-z0-9] of length n
-func RandomString(n int) string {
-	var letter = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
-
-	b := make([]rune, n)
-	for i := range b {
-		b[i] = letter[rand.Intn(len(letter))]
-	}
-	return string(b)
-}
 
 // DefaultEndpoint ...
 func DefaultEndpoint(w http.ResponseWriter, r *http.Request) {
@@ -50,28 +19,17 @@ func DefaultEndpoint(w http.ResponseWriter, r *http.Request) {
 
 func GetSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	uuid := mux.Vars(r)["uuid"]
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Content-Type", "application/json")
+	SetHeaders(w)
 	resp := Response{}
 
 	// Connect to Cassandra cluster and get session
-	cluster := gocql.NewCluster("127.0.0.1", "127.0.0.2", "127.0.0.3")
-	cluster.Keyspace = "sessions"
-	cluster.Consistency = gocql.Three
-	sess, _ := cluster.CreateSession()
+	sess := CassConnect("sessions")
 	defer sess.Close()
 
 	// Connect to Redis server
-	cache := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       1,
-	})
-	_, err := cache.Ping().Result()
+	cache, err := RedisConnect(1)
 	if err != nil {
-		resp.Code = GetSessionError
-		response, _ := json.Marshal(resp)
-		fmt.Fprint(w, string(response))
+		ResponseNoData(w, GetSessionError)
 		return
 	}
 
@@ -87,9 +45,7 @@ func GetSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	if err := sess.Query(`SELECT sessionid FROM sessions WHERE userid = ? AND active=True ALLOW FILTERING`,
 		uuid).Consistency(gocql.One).Scan(&resp.SessionID); err != nil || resp.SessionID == "" {
-		resp.Code = GetSessionError
-		response, _ := json.Marshal(resp)
-		fmt.Fprint(w, string(response))
+		ResponseNoData(w, GetSessionError)
 		return
 	}
 
@@ -103,35 +59,24 @@ func GetSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 
 func NewSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	uuid := mux.Vars(r)["uuid"]
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Content-Type", "application/json")
-	resp := Response{}
+	SetHeaders(w)
 
 	// Connect to Cassandra cluster and get session
-	cluster := gocql.NewCluster("127.0.0.1", "127.0.0.2", "127.0.0.3")
-	cluster.Keyspace = "sessions"
-	cluster.Consistency = gocql.Three
-	sess, _ := cluster.CreateSession()
+	sess := CassConnect("sessions")
 	defer sess.Close()
 
 	// Connect to Redis server
-	cache := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       1,
-	})
-	_, err := cache.Ping().Result()
-	if err == nil {
-		fmt.Println("connected to Redis")
+	cache, err := RedisConnect(1)
+	if err != nil {
+		ResponseNoData(w, GetSessionError)
+		return
 	}
 
 	// Generate ID and add to query
 	sessionid := RandomString(16)
 	if err := sess.Query(`INSERT INTO sessions (sessionid, active, ts, userid) VALUES (?, true, ?, ?)`,
 		sessionid, time.Now(), uuid).Exec(); err != nil {
-		resp.Code = PostSessionError
-		response, _ := json.Marshal(resp)
-		fmt.Fprint(w, string(response))
+		ResponseNoData(w, PostSessionError)
 		log.Print("Query insert failed: ")
 		log.Print(err)
 		return
@@ -140,6 +85,7 @@ func NewSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	// Add pair to Redis
 	err = cache.Set(sessionid, uuid, 0).Err()
 
+	resp := Response{}
 	resp.Code = PostSessionSuccess
 	resp.SessionID = sessionid
 	response, _ := json.Marshal(resp)
@@ -148,26 +94,18 @@ func NewSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 
 func DeleteSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	sess := mux.Vars(r)["sess"]
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Content-Type", "application/json")
+	SetHeaders(w)
 	resp := Response{}
 
 	// Connect to Cassandra cluster and get session
-	cluster := gocql.NewCluster("127.0.0.1")
-	cluster.Keyspace = "sessions"
-	cluster.Consistency = gocql.Three
-	db, _ := cluster.CreateSession()
+	db := CassConnect("sessions")
 	defer db.Close()
 
 	// Connect to Redis server
-	cache := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       1,
-	})
-	_, err := cache.Ping().Result()
-	if err == nil {
-		fmt.Println("connected to Redis")
+	cache, err := RedisConnect(1)
+	if err != nil {
+		ResponseNoData(w, GetSessionError)
+		return
 	}
 
 	// Remove session from redis
@@ -176,9 +114,7 @@ func DeleteSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	// Remove session from Cassandra
 	if err := db.Query(`UPDATE sessions SET active=false WHERE sessionid = ?`,
 		sess).Exec(); err != nil {
-		resp.Code = DelSessionError
-		response, _ := json.Marshal(resp)
-		fmt.Fprint(w, string(response))
+		ResponseNoData(w, DelSessionError)
 		log.Print("Query insert failed: ")
 		log.Print(err)
 		return
