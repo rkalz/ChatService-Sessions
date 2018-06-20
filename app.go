@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -18,7 +19,9 @@ func DefaultEndpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetSessionEndpoint(w http.ResponseWriter, r *http.Request) {
-	uuid := mux.Vars(r)["uuid"]
+	body, err := ioutil.ReadAll(r.Body)
+	request := Session{}
+	err = json.Unmarshal(body, &request)
 	SetHeaders(w)
 	resp := Response{}
 
@@ -34,23 +37,31 @@ func GetSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check Redis server
-	val, err := cache.Get(uuid).Result()
+	val, err := cache.Get(request.UUID).Result()
 	if val != "" {
-		resp.SessionID = val
+		session := Session{}
+		_ = json.Unmarshal([]byte(val), &session)
+		resp.SessionID = session.SessionID
 		resp.Code = GetSessionSuccess
 		response, _ := json.Marshal(resp)
 		fmt.Fprint(w, string(response))
 		return
 	}
 
-	if err := sess.Query(`SELECT sessionid FROM sessions WHERE userid = ? AND active=True ALLOW FILTERING`,
-		uuid).Consistency(gocql.One).Scan(&resp.SessionID); err != nil || resp.SessionID == "" {
+	if err := sess.Query(`SELECT sessionid FROM sessions WHERE userid = ? AND origin = ? AND active=True ALLOW FILTERING`,
+		request.UUID, request.Origin).Consistency(gocql.One).Scan(&resp.SessionID); err != nil || resp.SessionID == "" {
 		ResponseNoData(w, GetSessionError)
 		return
 	}
 
 	// Add to Redis server
-	err = cache.Set(resp.SessionID, uuid, 0).Err()
+	storedData := Session{
+		UUID:      request.UUID,
+		Origin:    request.Origin,
+		SessionID: resp.SessionID,
+	}
+	storedDataBytes, err := json.Marshal(storedData)
+	err = cache.Set(resp.SessionID, storedDataBytes, 0).Err()
 
 	resp.Code = GetSessionSuccess
 	response, _ := json.Marshal(resp)
@@ -58,7 +69,9 @@ func GetSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func NewSessionEndpoint(w http.ResponseWriter, r *http.Request) {
-	uuid := mux.Vars(r)["uuid"]
+	body, err := ioutil.ReadAll(r.Body)
+	request := Session{}
+	err = json.Unmarshal(body, &request)
 	SetHeaders(w)
 
 	// Connect to Cassandra cluster and get session
@@ -74,16 +87,22 @@ func NewSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	// Generate ID and add to query
 	sessionid := RandomString(16)
-	if err := sess.Query(`INSERT INTO sessions (sessionid, active, ts, userid) VALUES (?, true, ?, ?)`,
-		sessionid, time.Now(), uuid).Exec(); err != nil {
+	if err := sess.Query(`INSERT INTO sessions (sessionid, active, ts, userid, origin) VALUES (?, true, ?, ?, ?)`,
+		sessionid, time.Now(), request.UUID, request.Origin).Exec(); err != nil {
 		ResponseNoData(w, PostSessionError)
 		log.Print("Query insert failed: ")
 		log.Print(err)
 		return
 	}
 
-	// Add pair to Redis
-	err = cache.Set(sessionid, uuid, 0).Err()
+	// Add data to Redis
+	storedData := Session{
+		UUID:      request.UUID,
+		Origin:    request.Origin,
+		SessionID: sessionid,
+	}
+	storedDataBytes, err := json.Marshal(storedData)
+	err = cache.Set(sessionid, storedDataBytes, 0).Err()
 
 	resp := Response{}
 	resp.Code = PostSessionSuccess
@@ -93,7 +112,9 @@ func NewSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func DeleteSessionEndpoint(w http.ResponseWriter, r *http.Request) {
-	sess := mux.Vars(r)["sess"]
+	body, err := ioutil.ReadAll(r.Body)
+	request := Session{}
+	err = json.Unmarshal(body, &request)
 	SetHeaders(w)
 	resp := Response{}
 
@@ -109,13 +130,13 @@ func DeleteSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Remove session from redis
-	err = cache.Del(sess).Err()
+	err = cache.Del(request.SessionID).Err()
 
 	// Remove session from Cassandra
-	if err := db.Query(`UPDATE sessions SET active=false WHERE sessionid = ?`,
-		sess).Exec(); err != nil {
+	if err := db.Query(`UPDATE sessions SET active=false WHERE sessionid = ? AND origin = ?`,
+		request.SessionID, request.Origin).Exec(); err != nil {
 		ResponseNoData(w, DelSessionError)
-		log.Print("Query insert failed: ")
+		log.Print("Query update failed: ")
 		log.Print(err)
 		return
 	}
@@ -128,9 +149,9 @@ func DeleteSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 func main() {
 	r := mux.NewRouter()
 	r.HandleFunc("/", DefaultEndpoint)
-	r.HandleFunc("/api/v1/private/sessions/get/{uuid}", GetSessionEndpoint)
-	r.HandleFunc("/api/v1/private/sessions/add/{uuid}", NewSessionEndpoint).Methods("POST")
-	r.HandleFunc("/api/v1/private/sessions/del/{sess}", DeleteSessionEndpoint).Methods("POST")
+	r.HandleFunc("/api/v1/private/sessions/check/", GetSessionEndpoint).Methods("POST")
+	r.HandleFunc("/api/v1/private/sessions/add/", NewSessionEndpoint).Methods("POST")
+	r.HandleFunc("/api/v1/private/sessions/del/", DeleteSessionEndpoint).Methods("POST")
 
 	if os.Getenv("PORT") == "" {
 		os.Setenv("PORT", "8081")

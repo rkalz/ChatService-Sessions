@@ -29,6 +29,12 @@ type Response struct {
 	SessionID string `json:"session,omitempty"`
 }
 
+type Session struct {
+	UUID      string `json:"uuid"`
+	Origin    string `json:"origin,omitempty"`
+	SessionID string `json:"session,omitempty"`
+}
+
 // RandomString Generates a random string of [A-Za-z0-9] of length n
 func RandomString(n int) string {
 	var letter = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
