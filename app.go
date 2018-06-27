@@ -133,8 +133,8 @@ func DeleteSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	err = cache.Del(request.SessionID).Err()
 
 	// Remove session from Cassandra
-	if err := db.Query(`UPDATE sessions SET active=false WHERE sessionid = ? AND origin = ?`,
-		request.SessionID, request.Origin).Exec(); err != nil {
+	if err := db.Query(`UPDATE sessions SET active=false WHERE userid = ? AND origin = ?`,
+		request.UUID, request.Origin).Exec(); err != nil {
 		ResponseNoData(w, DelSessionError)
 		log.Print("Query update failed: ")
 		log.Print(err)
