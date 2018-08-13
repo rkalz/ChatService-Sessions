@@ -53,7 +53,7 @@ func SetHeaders(w http.ResponseWriter) {
 }
 
 func CassConnect(keyspace string) *gocql.Session {
-	acctCluster := gocql.NewCluster("127.0.0.1")
+	acctCluster := gocql.NewCluster("host.docker.internal")
 	acctCluster.Keyspace = keyspace
 	acctCluster.Consistency = gocql.Three
 	acctSess, _ := acctCluster.CreateSession()
@@ -62,7 +62,7 @@ func CassConnect(keyspace string) *gocql.Session {
 
 func RedisConnect(db int) (*redis.Client, error) {
 	cache := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
+		Addr:     "host.docker.internal:6379",
 		Password: "",
 		DB:       db,
 	})
