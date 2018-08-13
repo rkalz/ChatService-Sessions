@@ -154,7 +154,7 @@ func main() {
 	r.HandleFunc("/api/v1/private/sessions/del/", DeleteSessionEndpoint).Methods("POST")
 
 	if os.Getenv("PORT") == "" {
-		os.Setenv("PORT", "8081")
+		os.Setenv("PORT", "8080")
 	}
 
 	if err := http.ListenAndServe(":"+os.Getenv("PORT"), r); err != nil {

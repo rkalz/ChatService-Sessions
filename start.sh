@@ -1,1 +1,1 @@
-go run app.go utils.go
+docker run -d -it -p 8081:8080 --name=sess session go run app.go utils.go
