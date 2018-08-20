@@ -52,12 +52,12 @@ func SetHeaders(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 }
 
-func CassConnect(keyspace string) *gocql.Session {
+func CassConnect(keyspace string) (*gocql.Session, error) {
 	acctCluster := gocql.NewCluster("host.docker.internal")
 	acctCluster.Keyspace = keyspace
-	acctCluster.Consistency = gocql.Three
-	acctSess, _ := acctCluster.CreateSession()
-	return acctSess
+	acctCluster.Consistency = gocql.One
+	acctSess, err := acctCluster.CreateSession()
+	return acctSess, err
 }
 
 func RedisConnect(db int) (*redis.Client, error) {

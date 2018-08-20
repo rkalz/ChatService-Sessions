@@ -20,19 +20,41 @@ func DefaultEndpoint(w http.ResponseWriter, r *http.Request) {
 
 func GetSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		ResponseNoData(w, GetSessionError)
+		log.Print("Body read failed")
+		log.Print(err)
+		return
+	}
+
 	request := Session{}
 	err = json.Unmarshal(body, &request)
+	if err != nil {
+		ResponseNoData(w, GetSessionError)
+		log.Print("Body Unmarshal failed")
+		log.Print(err)
+		return
+	}
+
 	SetHeaders(w)
 	resp := Response{}
 
-	// Connect to Cassandra cluster and get session
-	sess := CassConnect("sessions")
+	// Connect to Cassandra cluster
+	sess, err := CassConnect("sessions")
+	if err != nil {
+		ResponseNoData(w, GetSessionError)
+		log.Print("Cassandra connection failed")
+		log.Print(err)
+		return
+	}
 	defer sess.Close()
 
 	// Connect to Redis server
 	cache, err := RedisConnect(1)
 	if err != nil {
 		ResponseNoData(w, GetSessionError)
+		log.Print("Redis connection failed")
+		log.Print(err)
 		return
 	}
 
@@ -51,6 +73,8 @@ func GetSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	if err := sess.Query(`SELECT sessionid FROM sessions WHERE userid = ? AND origin = ? AND active=True ALLOW FILTERING`,
 		request.UUID, request.Origin).Consistency(gocql.One).Scan(&resp.SessionID); err != nil || resp.SessionID == "" {
 		ResponseNoData(w, GetSessionError)
+		log.Print("Cassandra query failed")
+		log.Print(err)
 		return
 	}
 
@@ -62,6 +86,10 @@ func GetSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	storedDataBytes, err := json.Marshal(storedData)
 	err = cache.Set(resp.SessionID, storedDataBytes, 0).Err()
+	if err != nil {
+		log.Print("Redis caching failed")
+		log.Print(err)
+	}
 
 	resp.Code = GetSessionSuccess
 	response, _ := json.Marshal(resp)
@@ -74,14 +102,22 @@ func NewSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	err = json.Unmarshal(body, &request)
 	SetHeaders(w)
 
-	// Connect to Cassandra cluster and get session
-	sess := CassConnect("sessions")
+	// Connect to Cassandra cluster
+	sess, err := CassConnect("sessions")
+	if err != nil {
+		ResponseNoData(w, GetSessionError)
+		log.Print("Cassandra connection failed")
+		log.Print(err)
+		return
+	}
 	defer sess.Close()
 
 	// Connect to Redis server
 	cache, err := RedisConnect(1)
 	if err != nil {
 		ResponseNoData(w, GetSessionError)
+		log.Print("Redis connection failed")
+		log.Print(err)
 		return
 	}
 
@@ -103,6 +139,10 @@ func NewSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	storedDataBytes, err := json.Marshal(storedData)
 	err = cache.Set(sessionid, storedDataBytes, 0).Err()
+	if err != nil {
+		log.Print("Redis caching failed")
+		log.Print(err)
+	}
 
 	resp := Response{}
 	resp.Code = PostSessionSuccess
@@ -113,19 +153,34 @@ func NewSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 
 func DeleteSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		ResponseNoData(w, GetSessionError)
+		log.Print("Body read failed")
+		log.Print(err)
+		return
+	}
+
 	request := Session{}
 	err = json.Unmarshal(body, &request)
+	if err != nil {
+		ResponseNoData(w, GetSessionError)
+		log.Print("Body Unmarshal failed")
+		log.Print(err)
+		return
+	}
+
 	SetHeaders(w)
 	resp := Response{}
 
-	// Connect to Cassandra cluster and get session
-	db := CassConnect("sessions")
+	// Connect to Cassandra cluster
+	db, err := CassConnect("sessions")
 	defer db.Close()
 
 	// Connect to Redis server
 	cache, err := RedisConnect(1)
 	if err != nil {
 		ResponseNoData(w, GetSessionError)
+		log.Print(err)
 		return
 	}
 
@@ -158,6 +213,7 @@ func main() {
 	}
 
 	if err := http.ListenAndServe(":"+os.Getenv("PORT"), r); err != nil {
+		log.Print("Server start failed")
 		log.Fatal(err)
 	}
 }
