@@ -1,0 +1,8 @@
+.vscode/
+.gitignore
+build.sh
+debug
+Dockerfile
+restart.sh
+start.sh
+stop.sh

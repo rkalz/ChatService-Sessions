@@ -40,7 +40,7 @@ func GetSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	resp := Response{}
 
 	// Connect to Cassandra cluster
-	sess, err := CassConnect("sessions")
+	sess, err := ConnectToCassandra("sessions")
 	if err != nil {
 		ResponseNoData(w, GetSessionError)
 		log.Print("Cassandra connection failed")
@@ -103,7 +103,7 @@ func NewSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	SetHeaders(w)
 
 	// Connect to Cassandra cluster
-	sess, err := CassConnect("sessions")
+	sess, err := ConnectToCassandra("sessions")
 	if err != nil {
 		ResponseNoData(w, GetSessionError)
 		log.Print("Cassandra connection failed")
@@ -173,7 +173,7 @@ func DeleteSessionEndpoint(w http.ResponseWriter, r *http.Request) {
 	resp := Response{}
 
 	// Connect to Cassandra cluster
-	db, err := CassConnect("sessions")
+	db, err := ConnectToCassandra("sessions")
 	defer db.Close()
 
 	// Connect to Redis server
@@ -209,7 +209,7 @@ func main() {
 	r.HandleFunc("/api/v1/private/sessions/del/", DeleteSessionEndpoint).Methods("POST")
 
 	if os.Getenv("PORT") == "" {
-		os.Setenv("PORT", "8080")
+		os.Setenv("PORT", "80")
 	}
 
 	if err := http.ListenAndServe(":"+os.Getenv("PORT"), r); err != nil {
