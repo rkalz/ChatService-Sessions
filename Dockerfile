@@ -1,4 +1,4 @@
-FROM golang:1.8
+FROM golang:1.11-alpine
 
 RUN go get github.com/go-redis/redis
 RUN go get github.com/gocql/gocql
